@@ -1,5 +1,4 @@
-pub use std::io::Error;
-pub type Result<T=(), E=Error> = std::result::Result<T,E>;
+pub type Result<T=(), E=std::io::Error> = std::result::Result<T,E>;
 
 const INTERVAL_FLAG_INTEGER : u32 = 1<<2;
 #[derive(Debug)] #[derive(Clone,Copy)] #[repr(C)] struct Interval { min: u32, max: u32, flags : u32 }
@@ -63,7 +62,6 @@ pub struct PCM {
 	buffer: &'static mut [[i16; 2]],
 	status: *const Status,
 	control: *mut Control,
-	//period_size: u32,
 }
 
 impl PCM {
@@ -146,5 +144,5 @@ impl<MutexGuard: std::ops::DerefMut<Target=[PCM; N]>, S: FnMut() -> MutexGuard, 
 			for ((pcm, frames), fd) in (*self()).iter_mut().zip(frames.iter_mut()).zip(fds) { if !frames.is_empty() && fd.revents().contains(rustix::event::PollFlags::OUT) { pcm.try_write(frames)?; } } // Waits for device. TODO: fade out and return on UI quit
 		}
 		Ok(())
-	}}
-
+	}
+}

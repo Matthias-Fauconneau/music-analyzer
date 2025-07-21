@@ -11,12 +11,13 @@ symphonia={features= ['flac'], version='*'}
 num={git='https://github.com/Matthias-Fauconneau/num'}
 realfft='*'
 
-ui={git='https://github.com/Matthias-Fauconneau/ui', optional=true}
-vulkano={git='https://github.com/vulkano-rs/vulkano', default-features=false, features=['macros'], optional=true}
-vulkano-spirv={git='https://github.com/Matthias-Fauconneau/vulkano-spirv', optional=true}
-bytemuck={version='*', optional=true}
+ui={git='https://github.com/Matthias-Fauconneau/ui'}
+vulkano={git='https://github.com/vulkano-rs/vulkano', default-features=false, features=['macros']}
+vulkano-spirv={git='https://github.com/Matthias-Fauconneau/vulkano-spirv'}
+bytemuck='*'
 
 [features]
 resample=[]
-ui=['dep:ui', 'dep:vulkano', 'dep:vulkano-spirv', 'dep:bytemuck']
-default=['ui']
+
+[patch.'https://github.com/vulkano-rs/vulkano']
+vulkano={ git='https://github.com/Matthias-Fauconneau/vulkano' } # drm modifier fix

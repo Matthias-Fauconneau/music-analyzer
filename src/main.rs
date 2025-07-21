@@ -29,6 +29,7 @@ use {std::sync::Arc, parking_lot::{Mutex, MutexGuard}};
 impl<T> Arch<T> {
     pub fn new(inner: T) -> Self { Self(std::sync::Arc::new(Mutex::new(inner))) }
     pub fn lock(&self) -> MutexGuard<'_, T> { self.0.lock() }
+    pub fn clone(&self) -> Self { Self(self.0.clone()) }
 }
 unsafe impl<T> Send for Arch<T> {}
 unsafe impl<T> Sync for Arch<T> {}
@@ -78,73 +79,16 @@ fn write <S: sample::Sample+'static, D, Output: std::ops::DerefMut<Target=[self:
 	Ok(())
 }
 
-fn main() -> Result {
-	const N: usize = 2;
-	let player : Arch<Player> = Arch::new(Player::new(if N == 1 {&["/dev/snd/pcmC0D0p"]} else {&["/dev/snd/pcmC0D2p","/dev/snd/pcmC0D0p"]}));
-	let ref path = std::env::args().skip(1).next().map(std::path::PathBuf::from).unwrap();
-	println!("{}", path.display());
-	let (mut reader, mut decoder) = open(path)?;
-	let output = || MutexGuard::map(player.lock(), |unlocked_player| <&mut [PCM; N]>::try_from(unlocked_player.output.as_mut_slice()).unwrap());
-	let stop = false;
-	let mut packets = std::iter::from_fn(|| (!stop).then(|| reader.next_packet().ok()).flatten());
-	let sample_format = decoder.codec_params().sample_format.unwrap_or_else(|| match decoder.decode(&packets.next().unwrap()).unwrap() {
-		AudioBufferRef::S32(_) => SampleFormat::S32,
-		AudioBufferRef::F32(_) => SampleFormat::F32,
-		_ => unimplemented!(),
-	});
-	let ref mut resampler = Resampler::new(decoder.codec_params().sample_rate.unwrap(), player.lock().output[0].rate);
-	match sample_format {
-		SampleFormat::S32 => write::<i32, _, _, N>(resampler, packets, decoder, output),
-		SampleFormat::F32 => write::<f32, _, _, N>(resampler, packets, decoder, output),
-		_ => unimplemented!(),
-	}?;
-	Ok(())
-}
-
-/*fn main() -> Result {
-	let mut player : Arch<Player> = default();
-	let ref app = App::new()?;
-	thread::scope(|s| {
-		use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
-		let stop = AtomicBool::new(false);
-		/*thread::Builder::new().spawn_scoped(s, {let player : Arch<Player> = Arch::clone(&player); move || Result::<()>::unwrap(try {
-		})})?;*/
-		app.run("Player", &mut player).inspect_err(|e| println!("{e:?}"))
-	})
-}*/
-
-#[cfg(feature="ui")] use ui::{size, int2, image::{Image, xy, rgba8}, Widget, Error, throws, EventContext, Event, vulkan, shader};
-#[cfg(feature="ui")] use vulkan::{Context, Commands, ImageView, PrimitiveTopology, image, WriteDescriptorSet, linear};
-#[cfg(feature="ui")] shader!{view}
-#[cfg(feature="ui")] impl<T:Widget> Widget for Arch<T> {
+use ui::{size, int2, image::{Image, xy, rgba8}, Widget, EventContext, Event, vulkan, shader, run};
+use vulkan::{Context, Commands, ImageView, PrimitiveTopology, image, WriteDescriptorSet, linear};
+shader!{view}
+impl<T:Widget> Widget for Arch<T> {
 	fn paint(&mut self, context: &Context, commands: &mut Commands, target: Arc<ImageView>, size: size, offset: int2) -> Result { self.lock().paint(context, commands, target, size, offset) }
 	fn event(&mut self, context: &Context, commands: &mut Commands, size: size, event_context: &mut EventContext, event: &Event) -> Result<bool> { self.lock().event(context, commands, size, event_context, event) }
 }
 
-#[cfg(feature="ui")] impl Widget for Player {
-	#[throws] fn paint(&mut self, context: &Context, commands: &mut Commands, target: Arc<ImageView>, size: size, _: int2) {
-		/*let _ : Result<()> = try {
-			let path = url::Url::parse(self.metadata.get("mpris:artUrl").ok_or("Missing cover")?)?;
-			let path = path.to_file_path().expect("Expecting local cover");
-			let image = image_io::io::Reader::open(path)?.decode()?.into_rgb8();
-			let source = image::Image::<&[image::rgb::<u8>]>::cast_slice(&image, image.dimensions().into());
-			let mut target = {let size = fit(size, source.size); target.slice_mut((target.size-size)/2, size)};
-			let ref map = image::sRGB_to_PQ10;
-			let [num, den] = if source.size.x*target.size.y > source.size.y*target.size.x { [source.size.x, target.size.x] } else { [source.size.y, target.size.y] };
-			target.set(|p| image::rgb8_to_10(map, source[p*num/den]));
-		};*/
-		/*if !self.output.playing() {
-			let min = std::cmp::min(size.x, size.y).into();
-			let mut target = target.slice_mut((size-min)/2, min);
-			use image::xy;
-			target.slice_mut(size*xy{x:1, y:1}/xy{x:5, y:5}, size*xy{x:1, y:3}/xy{x:5, y:5}).fill(white.into());
-			target.slice_mut(size*xy{x:3, y:1}/xy{x:5, y:5}, size*xy{x:1, y:3}/xy{x:5, y:5}).fill(white.into());
-		}
-		if !self.metadata.is_empty() {
-			let mut text = text(self.title().expect(&format!("{:?}",self.metadata)), &[]);
-			let text_size = fit(size, text.size());
-			text.paint_fit(target, target.size, xy{x: 0, y: (size.y as i32-text_size.y as i32)/2});
-		}*/
+impl Widget for Player {
+	fn paint(&mut self, context: &Context, commands: &mut Commands, target: Arc<ImageView>, size: size, _: int2) -> Result {
 		let pass = view::Pass::new(context, false, PrimitiveTopology::TriangleList)?;
 		let image = image(context, commands, Image::from_xy(size, |xy{x,y}| rgba8{r: if x%2==0 { 0 } else { 0xFF }, g: if y%2==0 { 0 } else { 0xFF }, b: 0xFF, a: 0xFF}).as_ref())?;
 		pass.begin_rendering(context, commands, target.clone(), None, true, &view::Uniforms::empty(), &[
@@ -153,13 +97,35 @@ fn main() -> Result {
 		])?;
 		unsafe{commands.draw(3, 1, 0, 0)}?;
 		commands.end_rendering()?;
+		Ok(())
 	}
-	#[throws] fn event(&mut self, _: &Context, _: &mut Commands, _: size, _: &mut EventContext, event: &Event) -> bool {
-		match event {
-			//Event::Key(' ') => { for output in self.output { output.toggle_play_pause()?; } true },
-			//Event::Trigger => { event_context.toplevel.set_title(self.title()?); true }
-			_ => false
-		}
-	}
+}
+
+fn main() -> Result {
+	const N: usize = 2;
+	let player : Arch<Player> = Arch::new(Player::new(if N == 1 {&["/dev/snd/pcmC0D0p"]} else {&["/dev/snd/pcmC0D2p","/dev/snd/pcmC0D0p"]}));
+	let ref path = std::env::args().skip(1).next().map(std::path::PathBuf::from).unwrap();
+	println!("{}", path.display());
+	let (mut reader, mut decoder) = open(path)?;
+	let ref mut resampler = Resampler::new(decoder.codec_params().sample_rate.unwrap(), player.lock().output[0].rate);
+	std::thread::scope(|s| {
+		use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+		let stop = AtomicBool::new(false);
+		std::thread::Builder::new().spawn_scoped(s, {let player : Arch<Player> = Arch::clone(&player); move || {
+			let mut packets = std::iter::from_fn(|| (!stop.load(Relaxed)).then(|| reader.next_packet().ok()).flatten());
+			let sample_format = decoder.codec_params().sample_format.unwrap_or_else(|| match decoder.decode(&packets.next().unwrap()).unwrap() {
+				AudioBufferRef::S32(_) => SampleFormat::S32,
+				AudioBufferRef::F32(_) => SampleFormat::F32,
+				_ => unimplemented!(),
+			});
+			let output = || MutexGuard::map(player.lock(), |unlocked_player| <&mut [PCM; N]>::try_from(unlocked_player.output.as_mut_slice()).unwrap());
+			match sample_format {
+				SampleFormat::S32 => write::<i32, _, _, N>(resampler, packets, decoder, output),
+				SampleFormat::F32 => write::<f32, _, _, N>(resampler, packets, decoder, output),
+				_ => unimplemented!(),
+			}
+		}})?;
+		run("Player", Box::new(|_,_| Ok(Box::new(player))))
+	})
 }
 
