@@ -1,6 +1,3 @@
-use fehler::throws;
-//pub use alsa::Error;
-//pub type Result<T=()> = alsa::Result<T>;
 pub use std::io::Error;
 pub type Result<T=(), E=Error> = std::result::Result<T,E>;
 
@@ -108,7 +105,7 @@ impl PCM {
 			len
 		}
 		let start = unsafe{&*self.control}.sw_pointer%self.buffer.len();
-		let available = self.buffer.len() - unsafe{&*self.control}.sw_pointer + unsafe{&*self.status}.hw_pointer;
+		let available = self.buffer.len() - (unsafe{&*self.control}.sw_pointer - unsafe{&*self.status}.hw_pointer);
 		let len = if start + available <= self.buffer.len() {
 			let end = start+available;
 			write(&mut self.buffer[start..end], frames)
@@ -154,14 +151,16 @@ pub trait Write {
 }}*/
 
 impl<MutexGuard: std::ops::DerefMut<Target=[PCM; N]>, S: FnMut() -> MutexGuard, const N: usize> Write for S {
-	#[throws] fn write(mut self, frames: impl IntoIterator<IntoIter:ExactSizeIterator<Item=[i16; 2]>>) {
+	fn write(mut self, frames: impl IntoIterator<IntoIter:ExactSizeIterator<Item=[i16; 2]>>) -> Result {
 		let frames = Box::from_iter(frames.into_iter());
 		let ref mut frames = [(); N].map(|_| frames.iter().copied());
 		while !frames.iter().all(|frames| frames.is_empty()) {
-			let audio_lock = self(); // Only lock to get the device fd
-			let ref fds = Vec::from_iter(audio_lock.iter().map(|pcm| unsafe{std::os::fd::BorrowedFd::borrow_raw(rustix::fd::AsRawFd::as_raw_fd(&pcm.fd))})); // Downcast to drop lock while waiting
-			let ref mut fds = Vec::from_iter(fds.into_iter().map(|fd| rustix::event::PollFd::new(fd, rustix::event::PollFlags::OUT)));
+			let audio_lock = self(); // Need to lock to get the device fd
+			fn map<T, U>(iter: impl IntoIterator<Item=T>, f: impl Fn(T) -> U) -> Vec<U> { Vec::from_iter(iter.into_iter().map(f)) }
+			// Downcast to drop lock while waiting
+			let ref fds = map(audio_lock.deref(), |pcm| unsafe{std::os::fd::BorrowedFd::borrow_raw(rustix::fd::AsRawFd::as_raw_fd(&pcm.fd))});
 			drop(audio_lock); // But do not stay locked while this audio thread is waiting for the device
+			let ref mut fds = Vec::from_iter(fds.into_iter().map(|fd| rustix::event::PollFd::new(fd, rustix::event::PollFlags::OUT)));
 			//println!("wait");
 			rustix::event::poll(fds, None).unwrap();
 			assert!(fds.into_iter().any(|fd| fd.revents().contains(rustix::event::PollFlags::OUT)));
@@ -169,5 +168,6 @@ impl<MutexGuard: std::ops::DerefMut<Target=[PCM; N]>, S: FnMut() -> MutexGuard, 
 			//if(status->state == XRun) { io<PREPARE>(); underruns++; log("Underrun", underruns); }
 			for ((pcm, frames), fd) in (*self()).iter_mut().zip(frames.iter_mut()).zip(fds) { if !frames.is_empty() && fd.revents().contains(rustix::event::PollFlags::OUT) { pcm.try_write(frames)?; } } // Waits for device. TODO: fade out and return on UI quit
 		}
+		Ok(())
 	}}
 

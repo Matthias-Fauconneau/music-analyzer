@@ -1,0 +1,1 @@
+[{"label":"~/song.flac","command": "cargo run ~/song.flac"}]
