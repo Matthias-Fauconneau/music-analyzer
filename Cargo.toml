@@ -21,3 +21,6 @@ resample=[]
 
 [patch.'https://github.com/vulkano-rs/vulkano']
 vulkano={ git='https://github.com/Matthias-Fauconneau/vulkano' } # drm modifier fix
+
+[patch.'https://github.com/Matthias-Fauconneau/ui']
+ui={ path = '../ui' }

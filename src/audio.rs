@@ -62,6 +62,7 @@ pub struct PCM {
 	buffer: &'static mut [[i16; 2]],
 	status: *const Status,
 	control: *mut Control,
+	pub t: usize, // like sw_pointer but isn't reset by driver when state changes
 }
 
 impl PCM {
@@ -91,7 +92,7 @@ impl PCM {
   		unsafe{&mut *control}.avail_min = period_size as u64;
 		assert_eq!(unsafe{&*status}.state, STATE_SETUP);
   		prepare(&fd)?;
-		Ok(Self{fd, rate, buffer, status, control})//, period_size})
+		Ok(Self{fd, rate, buffer, status, control, t: 0})
 	}
 	pub fn try_write(&mut self, frames: &mut impl ExactSizeIterator<Item=[i16; 2]>) -> Result<usize> {
 		assert!(!frames.is_empty());
@@ -117,6 +118,7 @@ impl PCM {
 			};
 			assert!(len as u32 > 0);
 			unsafe{&mut *self.control}.sw_pointer += len;
+			self.t += len;
 			len
 		} else { assert_eq!(unsafe{&*self.status}.state, STATE_XRUN); 0 };
 		match unsafe{&*self.status}.state {
