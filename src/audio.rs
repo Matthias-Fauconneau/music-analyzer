@@ -103,21 +103,26 @@ impl PCM {
 			len
 		}
 		let start = unsafe{&*self.control}.sw_pointer%self.buffer.len();
-		let available = self.buffer.len() - (unsafe{&*self.control}.sw_pointer - unsafe{&*self.status}.hw_pointer);
-		let len = if start + available <= self.buffer.len() {
-			let end = start+available;
-			write(&mut self.buffer[start..end], frames)
-		} else {
-			let len = write(&mut self.buffer[start..], frames);
-			if len < self.buffer.len()-start { len }
-			else { len + write(&mut self.buffer[0..available-len], frames) }
-		};
-		assert!(len as u32 > 0);
-		unsafe{&mut *self.control}.sw_pointer += len;
+		let sw_pointer = unsafe{&*self.control}.sw_pointer;
+		let hw_pointer =  unsafe{&*self.status}.hw_pointer;
+		let len = if sw_pointer >= hw_pointer {
+			let available = self.buffer.len() - (sw_pointer - hw_pointer);
+			let len = if start + available <= self.buffer.len() {
+				let end = start+available;
+				write(&mut self.buffer[start..end], frames)
+			} else {
+				let len = write(&mut self.buffer[start..], frames);
+				if len < self.buffer.len()-start { len }
+				else { len + write(&mut self.buffer[0..available-len], frames) }
+			};
+			assert!(len as u32 > 0);
+			unsafe{&mut *self.control}.sw_pointer += len;
+			len
+		} else { assert_eq!(unsafe{&*self.status}.state, STATE_XRUN); 0 };
 		match unsafe{&*self.status}.state {
 			STATE_RUNNING => {},
 			STATE_PREPARED => { self::start(&self.fd)?; },
-			STATE_XRUN => { println!("xrun {available}"); self::prepare(&self.fd)?; },
+			STATE_XRUN => { println!("xrun"); self::prepare(&self.fd)?; },
 			state => panic!("{state}"),
 		}
 		Ok(len)

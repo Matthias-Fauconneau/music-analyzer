@@ -1,4 +1,4 @@
-#![feature(exact_size_is_empty, impl_trait_in_assoc_type)]#![feature(slice_from_ptr_range)]/*shader*/#![allow(mixed_script_confusables)]
+#![feature(exact_size_is_empty, impl_trait_in_assoc_type)]#![feature(slice_from_ptr_range)]/*shader*/#![allow(non_snake_case,mixed_script_confusables)]
 mod audio;
 pub trait Decoder<Packet> { type Buffer<'t> where Self: 't; fn decode(&mut self, _: &Packet) -> Self::Buffer<'_>; }
 pub trait SplitConvert<T> { type Channel<'t>: ExactSizeIterator<Item=T>+'t where Self: 't; fn split_convert<'t>(&'t self) -> [Self::Channel<'t>; 2]; }
@@ -50,26 +50,25 @@ impl<S:Sample, T:conv::FromSample<S>> SplitConvert<T> for std::borrow::Cow<'_, A
 	fn split_convert<'t>(&'t self) -> [Self::Channel<'t>; 2]  { [0,1].map(move |channel| self.chan(channel).iter().map(|&v| conv::FromSample::from_sample(v))) }
 }
 
-struct MainDecoder<D,S>(D, std::marker::PhantomData<S>);
-impl<S:Sample+'static> Decoder<Packet> for MainDecoder<Box<dyn codecs::Decoder>, S> where for<'t> AudioBufferRef<'t>: Cast<'t, S> {
+struct TypedDecoder<D,S>(D, std::marker::PhantomData<S>); // S type checks the audio buffer sample type
+impl<S:Sample+'static> Decoder<Packet> for TypedDecoder<Box<dyn codecs::Decoder>, S> where for<'t> AudioBufferRef<'t>: Cast<'t, S> {
 	type Buffer<'t> = Cow<'t, AudioBuffer<S>> where Self: 't;
 	fn decode(&mut self, packet: &Packet) -> Self::Buffer<'_> { self.0.decode(packet).unwrap().cast() }
 }
 
 fn write <S: sample::Sample+'static, D, Output: std::ops::DerefMut<Target=[self::PCM; N]>, const N: usize>
 	(resampler: &mut Option<Resampler>, ref mut packets: impl Iterator<Item=Packet>, decoder: D, ref mut output: impl FnMut() -> Output) -> audio::Result
-	where MainDecoder<D, S>: Decoder<Packet>,
-	for <'t> <MainDecoder<D, S> as Decoder<Packet>>::Buffer<'t>: SplitConvert<f32>,
-	for <'t> <MainDecoder<D, S> as Decoder<Packet>>::Buffer<'t>: SplitConvert<i16> {
-	#![allow(non_snake_case)]
+	where TypedDecoder<D, S>: Decoder<Packet>,
+	for <'t> <TypedDecoder<D, S> as Decoder<Packet>>::Buffer<'t>: SplitConvert<f32>,
+	for <'t> <TypedDecoder<D, S> as Decoder<Packet>>::Buffer<'t>: SplitConvert<i16> {
 	if let Some(resampler) = resampler.as_mut() {
-		let mut decoder = MainDecoder(decoder, std::marker::PhantomData);
+		let mut decoder = TypedDecoder(decoder, std::marker::PhantomData/*S*/);
 		while let Some([L, R]) = resampler.resample(packets, &mut decoder) {
 			let f32_to_i16 = |s| f32::clamp(s*32768., -32768., 32767.) as i16;
 			output.write(L.zip(R).map(|(L,R)| [L,R]).map(|[L,R]|[L,R].map(f32_to_i16)))?;
 		}
 	} else {
-		let mut decoder = MainDecoder(decoder, std::marker::PhantomData);
+		let mut decoder = TypedDecoder(decoder, std::marker::PhantomData/*S*/);
 		for ref packet in packets {
 			let ref buffer = Decoder::decode(&mut decoder, packet);
 			let [L, R] = SplitConvert::<i16>::split_convert(buffer);
@@ -102,15 +101,27 @@ impl Widget for Player {
 }
 
 fn main() -> Result {
+	let ref path = std::env::args().skip(1).next().map(std::path::PathBuf::from).unwrap();
+	let [L,R] = {
+		let (mut reader, mut decoder) = open(path)?;
+		let mut packets = ;
+		let mut decoder = TypedDecoder(decoder, std::marker::PhantomData::<i32>);
+		let [mut Ls, mut Rs] = [const{Vec::new()}; 2];
+		for ref packet in std::iter::from_fn(|| reader.next_packet().ok()) {
+			let ref buffer = Decoder::decode(&mut decoder, packet);
+			let [L, R] = SplitConvert::<f32>::split_convert(buffer);
+			Ls.append(&mut Vec::from_iter(L));
+			Rs.append(&mut Vec::from_iter(R));
+		}
+		[Ls, Rs]
+	};
+	/*let (mut reader, mut decoder) = open(path)?;
 	const N: usize = 2;
 	let player : Arch<Player> = Arch::new(Player::new(if N == 1 {&["/dev/snd/pcmC0D0p"]} else {&["/dev/snd/pcmC0D2p","/dev/snd/pcmC0D0p"]}));
-	let ref path = std::env::args().skip(1).next().map(std::path::PathBuf::from).unwrap();
-	println!("{}", path.display());
-	let (mut reader, mut decoder) = open(path)?;
 	let ref mut resampler = Resampler::new(decoder.codec_params().sample_rate.unwrap(), player.lock().output[0].rate);
+	use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+	let ref stop = AtomicBool::new(false);
 	std::thread::scope(|s| {
-		use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
-		let stop = AtomicBool::new(false);
 		std::thread::Builder::new().spawn_scoped(s, {let player : Arch<Player> = Arch::clone(&player); move || {
 			let mut packets = std::iter::from_fn(|| (!stop.load(Relaxed)).then(|| reader.next_packet().ok()).flatten());
 			let sample_format = decoder.codec_params().sample_format.unwrap_or_else(|| match decoder.decode(&packets.next().unwrap()).unwrap() {
@@ -125,7 +136,10 @@ fn main() -> Result {
 				_ => unimplemented!(),
 			}
 		}})?;
-		run("Player", Box::new(|_,_| Ok(Box::new(player))))
-	})
+		let r = run(&path.display().to_string(), Box::new(|_,_| Ok(Box::new(player))));
+		stop.store(true, Relaxed);
+		println!("stop");
+		r
+	})*/
 }
 
